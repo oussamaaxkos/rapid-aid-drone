@@ -102,10 +102,10 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
       await sendMessage({
         role: "user",
         parts: [
-          ...(text ? [{ type: "text" as const, text }] : [{ type: "text" as const, text: "Chno kayn f had tswira?" }]),
-          { type: "file" as const, mediaType: image.url.split(";")[0].split(":")[1], url: image.url },
+          { type: "text", text: text || "Chno kayn f had tswira?" },
+          { type: "file", mediaType: image.url.split(";")[0].split(":")[1], url: image.url },
         ],
-      });
+      } as unknown as UIMessage);
     } else {
       await sendMessage({ text });
     }
