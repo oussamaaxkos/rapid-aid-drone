@@ -1,26 +1,27 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
+import Chatbot from "@/components/Chatbot";
+import ReclaimFlow from "@/components/ReclaimFlow";
 
 export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "RescueBot — Drone Emergency Response" },
+      { name: "description", content: "Chat with RescueBot and dispatch the closest medical drone to your location in seconds." },
+    ],
+  }),
   component: Index,
 });
 
-// IMPORTANT: Replace this placeholder. For sites with multiple pages (About, Services, Contact, etc.),
-// create separate route files (about.tsx, services.tsx, contact.tsx) — don't put all pages in this file.
-function PlaceholderIndex() {
-  return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
-    </div>
-  );
-}
-
 function Index() {
-  return <PlaceholderIndex />;
+  const [view, setView] = useState<"chat" | "reclaim">("chat");
+  return (
+    <main className="min-h-screen flex items-center justify-center p-0 sm:p-6">
+      <div className="w-full max-w-md h-screen sm:h-[860px] sm:rounded-[2.5rem] sm:border sm:border-border overflow-hidden bg-background sm:shadow-2xl flex flex-col">
+        {view === "chat"
+          ? <Chatbot onReclaim={() => setView("reclaim")} />
+          : <ReclaimFlow onBack={() => setView("chat")} />}
+      </div>
+    </main>
+  );
 }
