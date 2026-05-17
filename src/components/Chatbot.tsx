@@ -150,14 +150,16 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
                 }`}
               >
                 {m.parts.map((p, i) => {
-                  if (p.type === "text")
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const part = p as any;
+                  if (part.type === "text")
                     return (
                       <div key={i} className="prose prose-sm dark:prose-invert max-w-none [&>*]:my-1">
-                        <ReactMarkdown>{p.text}</ReactMarkdown>
+                        <ReactMarkdown>{part.text}</ReactMarkdown>
                       </div>
                     );
-                  if (p.type === "file" && p.mediaType?.startsWith("image/"))
-                    return <img key={i} src={p.url} alt="" className="rounded-lg max-h-48 object-cover" />;
+                  if (part.type === "file" && typeof part.mediaType === "string" && part.mediaType.startsWith("image/"))
+                    return <img key={i} src={part.url} alt="" className="rounded-lg max-h-48 object-cover" />;
                   return null;
                 })}
               </div>
