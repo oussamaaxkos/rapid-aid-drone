@@ -1,34 +1,119 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Bot, User, Siren } from "lucide-react";
+import { Send, Bot, User, Siren, Mic, MicOff, ImagePlus, X } from "lucide-react";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+import ReactMarkdown from "react-markdown";
 
-interface Message { role: "bot" | "user"; text: string; }
-
-const initialMessages: Message[] = [
-  { role: "bot", text: "Hi, I'm RescueBot. I can answer questions or dispatch a medical drone." },
-  { role: "bot", text: "Tap the red Reclaim button below if you need urgent help." },
-];
-
-const botReply = (input: string) => {
-  const t = input.toLowerCase();
-  if (t.includes("drone")) return "Our drones carry first-aid kits, defibrillators and medication. ETA is usually under 4 minutes.";
-  if (t.includes("help") || t.includes("emergency")) return "For an emergency, please tap the Reclaim button — it will dispatch the closest drone.";
-  return "I'm here to help. You can ask about drones, coverage, or tap Reclaim for an emergency.";
+// Web Speech API types
+type SpeechRecognitionType = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start: () => void;
+  stop: () => void;
+  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
 };
 
+const getSR = (): (new () => SpeechRecognitionType) | null => {
+  if (typeof window === "undefined") return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any;
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+};
+
+const fileToDataURL = (file: File) =>
+  new Promise<string>((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result as string);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+
 export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
+  const [image, setImage] = useState<{ url: string; name: string } | null>(null);
+  const [listening, setListening] = useState(false);
+  const recRef = useRef<SpeechRecognitionType | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  const { messages, sendMessage, status } = useChat({
+    transport: new DefaultChatTransport({ api: "/api/chat" }),
+    messages: [
+      {
+        id: "intro",
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text: "Salam! Ana **MediBot** 馃┖锔�\n\nKan3awnek f l9adaya tobbiya b darija. T9der:\n- Tketbni wla thder m3aya b sotk 馃帳\n- Tsiftli tswira dyal jar7 wla situation 馃摳\n- T9lab 3la **RECLAIM** ila l 7ala khatira",
+          },
+        ],
+      },
+    ],
+  });
 
-  const send = () => {
-    const text = input.trim();
-    if (!text) return;
-    setMessages((m) => [...m, { role: "user", text }]);
-    setInput("");
-    setTimeout(() => setMessages((m) => [...m, { role: "bot", text: botReply(text) }]), 500);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, status]);
+
+  const toggleVoice = () => {
+    const SR = getSR();
+    if (!SR) {
+      alert("Voice maktach mde3ma f had l navigateur. Jarrab Chrome.");
+      return;
+    }
+    if (listening) {
+      recRef.current?.stop();
+      return;
+    }
+    const rec = new SR();
+    rec.lang = "ar-MA";
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.onresult = (e) => {
+      let txt = "";
+      for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
+      setInput(txt);
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    recRef.current = rec;
+    setListening(true);
+    rec.start();
   };
+
+  const onPickImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const url = await fileToDataURL(f);
+    setImage({ url, name: f.name });
+    e.target.value = "";
+  };
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text && !image) return;
+    if (listening) recRef.current?.stop();
+
+    if (image) {
+      await sendMessage({
+        role: "user",
+        parts: [
+          ...(text ? [{ type: "text" as const, text }] : [{ type: "text" as const, text: "Chno kayn f had tswira?" }]),
+          { type: "file" as const, mediaType: image.url.split(";")[0].split(":")[1], url: image.url },
+        ],
+      });
+    } else {
+      await sendMessage({ text });
+    }
+    setInput("");
+    setImage(null);
+  };
+
+  const busy = status === "submitted" || status === "streaming";
 
   return (
     <div className="flex flex-col h-full">
@@ -38,36 +123,59 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
             <Bot className="size-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-base font-semibold">RescueBot</h1>
+            <h1 className="text-base font-semibold">MediBot 路 Darija</h1>
             <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-              <span className="size-1.5 rounded-full bg-success animate-pulse" /> Online · Drones ready
+              <span className="size-1.5 rounded-full bg-success animate-pulse" />
+              {busy ? "Kayktib..." : "Online 路 Medical assistant"}
             </p>
           </div>
         </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {messages.map((m, i) => (
-          <div key={i} className={`flex gap-2 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            {m.role === "bot" && (
-              <div className="size-7 shrink-0 rounded-full bg-primary/15 grid place-items-center mt-auto">
-                <Bot className="size-3.5 text-primary" />
+        {messages.map((m) => {
+          const isUser = m.role === "user";
+          return (
+            <div key={m.id} className={`flex gap-2 ${isUser ? "justify-end" : "justify-start"}`}>
+              {!isUser && (
+                <div className="size-7 shrink-0 rounded-full bg-primary/15 grid place-items-center mt-auto">
+                  <Bot className="size-3.5 text-primary" />
+                </div>
+              )}
+              <div
+                className={`max-w-[82%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed space-y-2 ${
+                  isUser
+                    ? "bg-primary text-primary-foreground rounded-br-sm"
+                    : "bg-card text-card-foreground rounded-bl-sm border border-border/60"
+                }`}
+              >
+                {m.parts.map((p, i) => {
+                  if (p.type === "text")
+                    return (
+                      <div key={i} className="prose prose-sm dark:prose-invert max-w-none [&>*]:my-1">
+                        <ReactMarkdown>{p.text}</ReactMarkdown>
+                      </div>
+                    );
+                  if (p.type === "file" && p.mediaType?.startsWith("image/"))
+                    return <img key={i} src={p.url} alt="" className="rounded-lg max-h-48 object-cover" />;
+                  return null;
+                })}
               </div>
-            )}
-            <div className={`max-w-[78%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
-              m.role === "user"
-                ? "bg-primary text-primary-foreground rounded-br-sm"
-                : "bg-card text-card-foreground rounded-bl-sm border border-border/60"
-            }`}>
-              {m.text}
+              {isUser && (
+                <div className="size-7 shrink-0 rounded-full bg-secondary grid place-items-center mt-auto">
+                  <User className="size-3.5" />
+                </div>
+              )}
             </div>
-            {m.role === "user" && (
-              <div className="size-7 shrink-0 rounded-full bg-secondary grid place-items-center mt-auto">
-                <User className="size-3.5" />
-              </div>
-            )}
+          );
+        })}
+        {busy && (
+          <div className="flex gap-1.5 px-3 py-2">
+            <span className="size-2 rounded-full bg-primary/60 animate-bounce" />
+            <span className="size-2 rounded-full bg-primary/60 animate-bounce [animation-delay:120ms]" />
+            <span className="size-2 rounded-full bg-primary/60 animate-bounce [animation-delay:240ms]" />
           </div>
-        ))}
+        )}
         <div ref={endRef} />
       </div>
 
@@ -82,20 +190,52 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
             <span className="relative inline-flex size-3 rounded-full bg-white" />
           </span>
           <Siren className="size-5" />
-          RECLAIM — Emergency
+          RECLAIM — Urgence
         </button>
 
-        <div className="flex gap-2 items-center bg-card border border-border rounded-2xl px-3 py-2">
+        {image && (
+          <div className="relative inline-flex items-center gap-2 bg-card border border-border rounded-xl p-2">
+            <img src={image.url} alt="" className="size-12 rounded-lg object-cover" />
+            <span className="text-xs text-muted-foreground max-w-[160px] truncate">{image.name}</span>
+            <button
+              onClick={() => setImage(null)}
+              className="size-6 rounded-full bg-muted grid place-items-center"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
+
+        <div className="flex gap-2 items-center bg-card border border-border rounded-2xl px-2 py-2">
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickImage} />
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="size-9 rounded-xl bg-secondary grid place-items-center active:scale-95"
+            title="Sift tswira"
+          >
+            <ImagePlus className="size-4" />
+          </button>
+          <button
+            onClick={toggleVoice}
+            className={`size-9 rounded-xl grid place-items-center active:scale-95 ${
+              listening ? "bg-emergency text-emergency-foreground animate-pulse" : "bg-secondary"
+            }`}
+            title="Hder b sotk"
+          >
+            {listening ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+          </button>
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="Ask RescueBot..."
-            className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground py-1.5"
+            onKeyDown={(e) => e.key === "Enter" && !busy && send()}
+            placeholder={listening ? "Kanst9ble sotk..." : "Ktbli b darija..."}
+            disabled={busy}
+            className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground py-1.5 min-w-0"
           />
           <button
             onClick={send}
-            className="size-9 rounded-xl bg-primary text-primary-foreground grid place-items-center active:scale-95 transition"
+            disabled={busy || (!input.trim() && !image)}
+            className="size-9 rounded-xl bg-primary text-primary-foreground grid place-items-center active:scale-95 transition disabled:opacity-50"
           >
             <Send className="size-4" />
           </button>
