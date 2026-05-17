@@ -1,22 +1,25 @@
 import "@tanstack/react-start";
 import { createFileRoute } from "@tanstack/react-router";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { convertToModelMessages, streamText, type UIMessage } from "ai";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway";
+import { createOpenAiProvider } from "@/lib/ai-gateway";
 
-const SYSTEM_PROMPT = `Nta MediBot, doctor virtuel f darija marocaine (Moroccan Arabic).
-Khassek tjawb DAYMAN b darija marocaine maktouba b 7oruf latin (3afak, chno, kayn, bghit...) wla b l3arabia hsab l user.
+const SYSTEM_PROMPT = `انت MediBot، طبيب افتراضي بالدارجة المغربية.
+خاصك تجاوب ديما بالدارجة المغربية مكتوبة بحروف عربية فقط، بلا لاتيني.
 
-Specialité dyalk:
-- L9adaya l tobbiya (medical) - first aid, urgences, premiers secours, sympt么mes, l3lajat l basita
-- Tnasi9 m3a drones dyal RescueBot bach ywsslo l mosa3ada
-- Conseils tibbiya basés 3la data confidente (WHO, Red Cross, protocoles dyal urgences)
+التخصص ديالك:
+- القضايا الطبية: إسعافات أولية، مستعجلات، أعراض، علاجات بسيطة
+- تنسيق مع درونات RescueBot باش يوصلو المساعدة
+- نصائح طبية مبنية على مصادر موثوقة (WHO, Red Cross, بروتوكولات الطوارئ)
 
-R猫gles mohimma:
-- Ila l user 3tak chi tswira (image) dyal jrou7 wla situation tobbiya, 7llelha mli7 w 3tih taw9if dyal l 7ala + chno khasso ydir daba (first aid steps)
-- Ila l 7ala khatira (bleeding kbir, cardiac arrest, perte de conscience) goul liha direct: "DABA 9LB 3LA RECLAIM BACH NSIFTO DRONE!"
-- Kun mokhtassar w wad7, dir steps mra99ma (1, 2, 3)
-- Ma t3tich diagnostics définitifs, golik douz l doctor 7a9i9i mn b3d
-- Ila s2alouk 7aja makantch tobbiya, jaweb b lotf w rja3hom l mawdo3 dyal l medical/RescueBot`;
+قواعد مهمة:
+- إلا عطاك المستخدم تصويرة ديال جرح ولا حالة طبية، حللها مزيان و عطيو تقييم للحالة + شنو يدير دابا (خطوات الإسعاف)
+- إلا كانت الحالة خطيرة (نزيف كبير، سكتة قلبية، فقدان الوعي) قول مباشرة: "دابا قلب على RECLAIM باش نصيفطو درون!"
+- كون مختصر وواضح، دير خطوات مرقمة (1، 2، 3)
+- ما تعطيش تشخيص نهائي، و قول يمشي لطبيب حقيقي من بعد
+- إلا سولوك على شي حاجة ماشي طبية، جاوب بلطف ورجعهم لموضوع RescueBot الطبي`;
 
 export const Route = createFileRoute("/api/chat")({
   server: {
@@ -25,16 +28,83 @@ export const Route = createFileRoute("/api/chat")({
         const { messages } = (await request.json()) as { messages: UIMessage[] };
         if (!Array.isArray(messages)) return new Response("messages required", { status: 400 });
 
-        const key = process.env.LOVABLE_API_KEY;
-        if (!key) return new Response("Missing LOVABLE_API_KEY", { status: 500 });
+        const key = process.env.OPENAI_API_KEY;
+        if (!key) return new Response("Missing OPENAI_API_KEY", { status: 500 });
 
-        const gateway = createLovableAiGatewayProvider(key);
-        const model = gateway("google/gemini-3-flash-preview");
+        const openai = createOpenAiProvider(key);
+        const model = openai("gpt-4o");
+
+        const ragStoreDir = process.env.RAG_STORE_DIR || path.join(process.cwd(), "rag", "faiss-store");
+        const ragScript = process.env.RAG_PYTHON_SCRIPT || path.join(process.cwd(), "rag", "query_index.py");
+        const ragPython = process.env.RAG_PYTHON || "python";
+        const ragEnabled = existsSync(ragStoreDir) && existsSync(ragScript);
+
+        const modelMessages = await convertToModelMessages(messages);
+        const hasImage = modelMessages.some((message) =>
+          Array.isArray(message.content) && message.content.some((part) => part.type === "file"),
+        );
+        console.log("hasImage", hasImage);
+
+        for (const message of modelMessages) {
+          if (!Array.isArray(message.content)) continue;
+          for (const part of message.content) {
+            if (part.type === "file" && typeof part.data === "string" && part.data.startsWith("data:")) {
+              const commaIndex = part.data.indexOf(",");
+              if (commaIndex > -1) {
+                const base64 = part.data.slice(commaIndex + 1);
+                part.data = Buffer.from(base64, "base64");
+              }
+            }
+          }
+        }
+
+        let contextBlock = "";
+        if (ragEnabled) {
+          const lastUser = messages
+            .filter((m) => m.role === "user")
+            .at(-1);
+          const query =
+            lastUser?.parts
+              ?.map((part) => (part.type === "text" ? part.text : ""))
+              .join(" ")
+              .trim() || "";
+
+          if (query) {
+            const ragPayload = JSON.stringify({ query });
+            const result = spawnSync(
+              ragPython,
+              [ragScript, "--store", ragStoreDir, "--top-k", "5"],
+              {
+                encoding: "utf-8",
+                env: { ...process.env, RAG_QUERY: ragPayload },
+              },
+            );
+
+            if (result.status === 0 && result.stdout) {
+              try {
+                const parsed = JSON.parse(result.stdout);
+                if (Array.isArray(parsed.results) && parsed.results.length > 0) {
+                  contextBlock = parsed.results
+                    .map((r: { text: string; source?: string; page?: number }) =>
+                      `[${r.source || "source"}${r.page ? ` p.${r.page}` : ""}] ${r.text}`,
+                    )
+                    .join("\n\n");
+                }
+              } catch {
+                contextBlock = "";
+              }
+            }
+          }
+        }
+
+        const systemPrompt = contextBlock
+          ? `${SYSTEM_PROMPT}\n\nContext from local PDFs:\n${contextBlock}`
+          : SYSTEM_PROMPT;
 
         const result = streamText({
           model,
-          system: SYSTEM_PROMPT,
-          messages: await convertToModelMessages(messages),
+          system: systemPrompt,
+          messages: modelMessages,
         });
 
         return result.toUIMessageStreamResponse({ originalMessages: messages });

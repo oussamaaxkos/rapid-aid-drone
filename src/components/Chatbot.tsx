@@ -11,9 +11,10 @@ type SpeechRecognitionType = {
   interimResults: boolean;
   start: () => void;
   stop: () => void;
+  onstart: (() => void) | null;
   onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
   onend: (() => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((e?: { error?: string }) => void) | null;
 };
 
 const getSR = (): (new () => SpeechRecognitionType) | null => {
@@ -35,7 +36,10 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
   const [input, setInput] = useState("");
   const [image, setImage] = useState<{ url: string; name: string } | null>(null);
   const [listening, setListening] = useState(false);
+  const [speakOnNextReply, setSpeakOnNextReply] = useState(false);
   const recRef = useRef<SpeechRecognitionType | null>(null);
+  const latestInputRef = useRef("");
+  const autoSendRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -48,18 +52,45 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
         parts: [
           {
             type: "text",
-            text: "Salam! Ana **MediBot** 馃┖锔�\n\nKan3awnek f l9adaya tobbiya b darija. T9der:\n- Tketbni wla thder m3aya b sotk 馃帳\n- Tsiftli tswira dyal jar7 wla situation 馃摳\n- T9lab 3la **RECLAIM** ila l 7ala khatira",
+            text: "مرحبا! أنا **MediBot**\n\nنعاونك فالقضايا الطبية بالدارجة. تقدر:\n- تكتب ليا ولا تهدر معايا بصوتك\n- تصيفط ليا تصويرة ديال جرح ولا حالة\n- تقلب على **RECLAIM** إلا كانت الحالة خطيرة",
           },
         ],
       },
     ] as UIMessage[],
   });
 
+  const busy = status === "submitted" || status === "streaming";
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, status]);
 
-  const toggleVoice = () => {
+  useEffect(() => {
+    latestInputRef.current = input;
+  }, [input]);
+
+  useEffect(() => {
+    if (!speakOnNextReply || busy) return;
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage || lastMessage.role !== "assistant") return;
+
+    const text = lastMessage.parts
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join(" ")
+      .trim();
+
+    if (!text || typeof window === "undefined" || !window.speechSynthesis) return;
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "fr-FR";
+    utterance.rate = 1.02;
+    utterance.pitch = 1.0;
+    window.speechSynthesis.speak(utterance);
+    setSpeakOnNextReply(false);
+  }, [messages, speakOnNextReply, busy]);
+
+  const toggleVoice = async () => {
     const SR = getSR();
     if (!SR) {
       alert("Voice maktach mde3ma f had l navigateur. Jarrab Chrome.");
@@ -69,19 +100,42 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
       recRef.current?.stop();
       return;
     }
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      alert("Khassk t3ti permission dyal microphone bash tkhddem.");
+      return;
+    }
     const rec = new SR();
     rec.lang = "ar-MA";
     rec.continuous = false;
     rec.interimResults = true;
+    autoSendRef.current = true;
+    rec.onstart = () => setListening(true);
     rec.onresult = (e) => {
       let txt = "";
       for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
+      latestInputRef.current = txt;
       setInput(txt);
     };
-    rec.onend = () => setListening(false);
-    rec.onerror = () => setListening(false);
+    rec.onend = () => {
+      setListening(false);
+      if (autoSendRef.current) {
+        autoSendRef.current = false;
+        const text = latestInputRef.current.trim();
+        if (text) {
+          setSpeakOnNextReply(true);
+          sendText(text);
+        }
+      }
+    };
+    rec.onerror = (e) => {
+      setListening(false);
+      if (e?.error === "not-allowed") {
+        alert("Permission dyal microphone mrefda.");
+      }
+    };
     recRef.current = rec;
-    setListening(true);
     rec.start();
   };
 
@@ -91,6 +145,15 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
     const url = await fileToDataURL(f);
     setImage({ url, name: f.name });
     e.target.value = "";
+  };
+
+  const sendText = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (listening) recRef.current?.stop();
+    await sendMessage({ text: trimmed });
+    setInput("");
+    setImage(null);
   };
 
   const send = async () => {
@@ -107,13 +170,9 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
         ],
       } as unknown as UIMessage);
     } else {
-      await sendMessage({ text });
+      await sendText(text);
     }
-    setInput("");
-    setImage(null);
   };
-
-  const busy = status === "submitted" || status === "streaming";
 
   return (
     <div className="flex flex-col h-full">
@@ -123,10 +182,10 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
             <Bot className="size-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-base font-semibold">MediBot 路 Darija</h1>
+            <h1 className="text-base font-semibold">ميدي بوت | دارجة</h1>
             <p className="text-xs text-muted-foreground flex items-center gap-1.5">
               <span className="size-1.5 rounded-full bg-success animate-pulse" />
-              {busy ? "Kayktib..." : "Online 路 Medical assistant"}
+              {busy ? "كايكتب..." : "متصل | مساعد طبي"}
             </p>
           </div>
         </div>
@@ -192,7 +251,7 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
             <span className="relative inline-flex size-3 rounded-full bg-white" />
           </span>
           <Siren className="size-5" />
-          RECLAIM — Urgence
+          RECLAIM — طوارئ
         </button>
 
         {image && (
@@ -213,7 +272,7 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
           <button
             onClick={() => fileRef.current?.click()}
             className="size-9 rounded-xl bg-secondary grid place-items-center active:scale-95"
-            title="Sift tswira"
+            title="أرسل صورة"
           >
             <ImagePlus className="size-4" />
           </button>
@@ -222,7 +281,7 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
             className={`size-9 rounded-xl grid place-items-center active:scale-95 ${
               listening ? "bg-emergency text-emergency-foreground animate-pulse" : "bg-secondary"
             }`}
-            title="Hder b sotk"
+            title="تكلم بصوتك"
           >
             {listening ? <MicOff className="size-4" /> : <Mic className="size-4" />}
           </button>
@@ -230,7 +289,7 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !busy && send()}
-            placeholder={listening ? "Kanst9ble sotk..." : "Ktbli b darija..."}
+            placeholder={listening ? "كنستقبل صوتك..." : "اكتب بالدارجة..."}
             disabled={busy}
             className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground py-1.5 min-w-0"
           />

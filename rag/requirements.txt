@@ -1,0 +1,6 @@
+faiss-cpu==1.8.0
+langchain==0.2.16
+langchain-community==0.2.16
+langchain-openai==0.1.23
+openai==1.63.2
+pypdf==5.1.0
