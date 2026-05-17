@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, Bot, User, Siren, Mic, MicOff, ImagePlus, X } from "lucide-react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
+import { DefaultChatTransport, type UIMessage } from "ai";
 import ReactMarkdown from "react-markdown";
 
 // Web Speech API types
@@ -52,7 +52,7 @@ export default function Chatbot({ onReclaim }: { onReclaim: () => void }) {
           },
         ],
       },
-    ],
+    ] as UIMessage[],
   });
 
   useEffect(() => {
